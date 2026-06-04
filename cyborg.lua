@@ -13,7 +13,7 @@ local API_HOST   = "http://mbasic7.pikamc.vn:25232"
 local API_KEY    = "K#8mV2@qL7!xP4R"
 local API_SECRET = "T9$wN5&jC1*zH8M"
 local DISCORD    = "https://discord.com/users/1214548383633768480/"
-local HB_TICK    = 5   -- heartbeat mỗi 5 giây
+local HB_TICK    = 15  -- heartbeat mỗi 15 giây (server timeout là 30s)
 
 -- ── Logger & Kick ─────────────────────────────────────────────────────────────
 local function log(m) print("[keysystem] " .. tostring(m)) end
@@ -137,21 +137,28 @@ local function apiPost(endpoint, body, silent)
         ["x-api-key"]    = API_KEY,
     }
 
-    local ok, res = pcall(fn, {
-        Url     = API_HOST .. endpoint,
-        Method  = "POST",
-        Headers = headers,
-        Body    = bodyStr,
-    })
-    if not ok then
-        if not silent then log("[ ERR ] Request Error: " .. tostring(res)) end
-        return nil
+    -- Thử lại tối đa 3 lần khi request thất bại
+    local MAX_RETRY = silent and 1 or 3
+    for attempt = 1, MAX_RETRY do
+        local ok, res = pcall(fn, {
+            Url     = API_HOST .. endpoint,
+            Method  = "POST",
+            Headers = headers,
+            Body    = bodyStr,
+        })
+        if ok then
+            local raw  = type(res) == "table" and (res.Body or res.body) or tostring(res)
+            local ok2, data = pcall(function() return HttpService:JSONDecode(raw) end)
+            if ok2 then return data end
+        end
+        if attempt < MAX_RETRY then
+            if not silent then log("[ RETRY " .. attempt .. "/" .. MAX_RETRY .. " ] " .. endpoint) end
+            task.wait(1.5)
+        else
+            if not silent then log("[ ERR ] Request Error sau " .. MAX_RETRY .. " lần: " .. endpoint) end
+        end
     end
-
-    local raw  = type(res) == "table" and (res.Body or res.body) or tostring(res)
-    local ok2, data = pcall(function() return HttpService:JSONDecode(raw) end)
-    if not ok2 then return nil end
-    return data
+    return nil
 end
 
 -- ── Verify ────────────────────────────────────────────────────────────────────
@@ -229,10 +236,12 @@ local function main()
         end
     end)
 
-    -- Xóa thông tin nhạy cảm
-    task.delay(1, function()
-        API_KEY    = nil
+    -- Giữ local copy của API_KEY trước khi xóa (heartbeat closure vẫn cần dùng)
+    -- QUAN TRỌNG: Không nil API_KEY ở đây vì heartbeat loop vẫn dùng upvalue này
+    task.delay(5, function()
+        -- Chỉ xóa API_SECRET (không cần trong heartbeat)
         API_SECRET = nil
+        -- script_key đã capture vào keySnap, có thể xóa an toàn
         script_key = nil
     end)
 
