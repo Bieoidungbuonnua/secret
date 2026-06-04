@@ -1,131 +1,163 @@
 -- ╔══════════════════════════════════════════════════════════════════╗
 -- ║              MTRCHILL KEY SYSTEM v5.0 – Lua Client              ║
--- ║         Đặt key vào biến script_key trước khi chạy             ║
+-- ║                                                                  ║
+-- ║  CÁCH DÙNG:                                                      ║
+-- ║    script_key = "KEY_CUA_BAN"                                    ║
+-- ║    loadstring(game:HttpGet("URL_SCRIPT_CUA_BAN"))()              ║
 -- ╚══════════════════════════════════════════════════════════════════╝
-
--- ┌──────────────────────────────────────────────────────────────────┐
--- │  Cách dùng:                                                      │
--- │    script_key = "KEY_CUA_BAN"    ← dán key vào đây              │
--- │    loadstring(game:HttpGet("URL_CUA_BAN"))()                     │
--- └──────────────────────────────────────────────────────────────────┘
 
 script_key = script_key or ""
 
 -- ══════════════════════════════════════════════════════════════════════
---  CONFIG  (chỉ admin mới chỉnh phần này)
+--  §1  CONFIG  (chỉ admin chỉnh)
 -- ══════════════════════════════════════════════════════════════════════
 local CFG = {
-    API_HOST   = "http://mbasic7.pikamc.vn:25232",
-    API_KEY    = "K#8mV2@qL7!xP4R",
+    HOST       = "http://mbasic7.pikamc.vn:25232",
+    API_KEY    = "K#8mV2@qL7!xP4R",   -- x-api-key header, mọi request
+    API_SECRET = "T9$wN5&jC1*zH8M",   -- ký HMAC cho /api/verify
     DISCORD    = "https://discord.com/users/1214548383633768480/",
-    HB_TICK    = 15,   -- giây giữa mỗi heartbeat  (server timeout = 30s)
-    HB_TIMEOUT = 30,   -- giây server coi tab là dead nếu không heartbeat
-    MAX_RETRY  = 3,    -- số lần retry khi request thất bại
-    RETRY_WAIT = 2,    -- giây chờ giữa mỗi retry
+    HB_TICK    = 15,    -- giây giữa mỗi heartbeat (server timeout 30s)
+    MAX_RETRY  = 3,     -- số lần retry khi request thất bại
+    RETRY_WAIT = 2,     -- giây đợi giữa retry
 }
 
 -- ══════════════════════════════════════════════════════════════════════
---  SERVICES
+--  §2  SERVICES
 -- ══════════════════════════════════════════════════════════════════════
 local Players     = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local RunService  = game:GetService("RunService")
 local lp          = Players.LocalPlayer
 
 -- ══════════════════════════════════════════════════════════════════════
---  LOGGER & KICK
+--  §3  LOGGER & KICK
 -- ══════════════════════════════════════════════════════════════════════
 local function log(msg)
-    print(string.format("[KeySystem] %s", tostring(msg)))
+    print(string.format("[KS v5] %s", tostring(msg)))
 end
 
-local function kick(msg)
+local function kick(reason)
     lp:Kick(string.format(
-        "\n\n❌  %s\n\n─────────────────────────\nDiscord: %s",
-        msg, CFG.DISCORD
+        "\n\n❌  %s\n\n──────────────────────────\nDiscord hỗ trợ:\n%s",
+        tostring(reason), CFG.DISCORD
     ))
 end
 
 -- ══════════════════════════════════════════════════════════════════════
---  HWID – lấy định danh thiết bị (ưu tiên: fingerprint > analytics > userId)
+--  §4  SHA-256 & HMAC-SHA256 (pure Lua — dùng để ký request verify)
+--
+--  Không cần executor fingerprint hay HWID.
+--  Client ký: HMAC-SHA256(API_SECRET, key_code:user_id:timestamp)
+--  Server verify + kiểm tra timestamp ±60s → chống replay attack.
 -- ══════════════════════════════════════════════════════════════════════
-local function getExecutorName()
-    local checks = {identifyexecutor, getexecutorname}
-    for _, fn in ipairs(checks) do
-        if fn then
-            local ok, v = pcall(fn)
-            if ok and v and v ~= "" then return tostring(v) end
-        end
-    end
-    if syn and syn.request  then return "Synapse" end
-    if KRNL_LOADED          then return "KRNL"    end
-    return "Unknown"
+local _bit = bit32 or (bit and bit) or require("bit")
+local band, bxor, rshift, lshift = _bit.band, _bit.bxor, _bit.rshift, _bit.lshift
+
+local function rrot(x, n)
+    return band(bxor(rshift(x, n), lshift(x, 32 - n)), 0xFFFFFFFF)
 end
 
-local function getHwid()
-    local exec = getExecutorName()
-    -- 1. Synapse fingerprint
-    if exec:lower():find("synapse") and syn and syn.fingerprint then
-        local ok, v = pcall(syn.fingerprint)
-        if ok and v and v ~= "" then
-            return "SYN_" .. tostring(v) .. "_" .. tostring(lp.UserId):sub(-4)
+local _K = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+}
+
+local function sha256(msg)
+    local ml = #msg * 8
+    msg = msg .. "\128" .. string.rep("\0", (56 - (#msg + 1) % 64) % 64)
+    for i = 7, 0, -1 do
+        msg = msg .. string.char(band(rshift(ml, i * 8), 0xFF))
+    end
+    local h = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 }
+    for i = 1, #msg, 64 do
+        local w = {}
+        for t = 1, 16 do
+            local a, b, c, d = msg:byte(i + (t-1)*4, i + (t-1)*4 + 3)
+            w[t] = band(lshift(a,24) + lshift(b,16) + lshift(c,8) + d, 0xFFFFFFFF)
         end
+        for t = 17, 64 do
+            local s0 = bxor(rrot(w[t-15],7),  rrot(w[t-15],18), rshift(w[t-15],3))
+            local s1 = bxor(rrot(w[t-2], 17), rrot(w[t-2], 19), rshift(w[t-2], 10))
+            w[t] = band(w[t-16] + s0 + w[t-7] + s1, 0xFFFFFFFF)
+        end
+        local a,b,c,d,e,f,g,hv = table.unpack(h)
+        for t = 1, 64 do
+            local S1    = bxor(rrot(e,6),  rrot(e,11), rrot(e,25))
+            local ch    = bxor(band(e,f),  band(0xFFFFFFFF - e, g))
+            local temp1 = band(hv + S1 + ch + _K[t] + w[t], 0xFFFFFFFF)
+            local S0    = bxor(rrot(a,2),  rrot(a,13), rrot(a,22))
+            local maj   = bxor(band(a,b),  band(a,c),  band(b,c))
+            local temp2 = band(S0 + maj, 0xFFFFFFFF)
+            hv=g; g=f; f=e
+            e = band(d + temp1, 0xFFFFFFFF)
+            d=c; c=b; b=a; a = band(temp1 + temp2, 0xFFFFFFFF)
+        end
+        h[1]=band(h[1]+a,0xFFFFFFFF); h[2]=band(h[2]+b,0xFFFFFFFF)
+        h[3]=band(h[3]+c,0xFFFFFFFF); h[4]=band(h[4]+d,0xFFFFFFFF)
+        h[5]=band(h[5]+e,0xFFFFFFFF); h[6]=band(h[6]+f,0xFFFFFFFF)
+        h[7]=band(h[7]+g,0xFFFFFFFF); h[8]=band(h[8]+hv,0xFFFFFFFF)
     end
-    -- 2. RbxAnalyticsService clientId
-    local ok, v = pcall(function()
-        return game:GetService("RbxAnalyticsService"):GetClientId()
-    end)
-    if ok and v and v ~= "" then
-        return exec:sub(1, 3):upper() .. "_" .. tostring(v) .. "_" .. tostring(lp.UserId):sub(-4)
-    end
-    -- 3. Fallback: userId
-    return "USR_" .. tostring(lp.UserId)
+    local r = ""
+    for _, v in ipairs(h) do r = r .. string.format("%08x", v) end
+    return r
+end
+
+local function hmacSha256(secret, message)
+    if #secret > 64 then secret = sha256(secret) end
+    secret = secret .. string.rep("\0", 64 - #secret)
+    local opad = secret:gsub(".", function(c) return string.char(bxor(c:byte(), 0x5C)) end)
+    local ipad = secret:gsub(".", function(c) return string.char(bxor(c:byte(), 0x36)) end)
+    return sha256(opad .. sha256(ipad .. message))
 end
 
 -- ══════════════════════════════════════════════════════════════════════
---  HTTP – tự phát hiện request function của executor
+--  §5  HTTP — tự phát hiện request function của executor
 -- ══════════════════════════════════════════════════════════════════════
 local _reqFn = nil
 local function getReqFn()
     if _reqFn then return _reqFn end
-    local candidates = {
-        (syn  and syn.request),
-        (http and http.request),
+    local cands = {
+        syn   and syn.request,
+        http  and http.request,
         request,
-        (fluxus and fluxus.request),
+        fluxus and fluxus.request,
     }
-    for _, fn in ipairs(candidates) do
-        if type(fn) == "function" then
-            _reqFn = fn
-            return fn
-        end
+    for _, fn in ipairs(cands) do
+        if type(fn) == "function" then _reqFn = fn; return fn end
     end
     return nil
 end
 
--- Gửi POST request với retry tự động
--- silent = true → không log lỗi (dùng cho heartbeat)
-local function apiPost(endpoint, body, silent)
+-- POST với retry tự động. silent=true → không log lỗi (dùng cho heartbeat)
+local function apiPost(endpoint, body, extraHeaders, silent)
     local fn = getReqFn()
     if not fn then
-        if not silent then log("[ERR] Không tìm thấy HTTP function") end
+        if not silent then log("[ERR] Không có HTTP function") end
         return nil
     end
 
     local ok_enc, bodyStr = pcall(HttpService.JSONEncode, HttpService, body)
-    if not ok_enc then
-        if not silent then log("[ERR] JSON encode thất bại") end
-        return nil
-    end
+    if not ok_enc then return nil end
 
     local headers = {
         ["Content-Type"] = "application/json",
         ["x-api-key"]    = CFG.API_KEY,
     }
+    if extraHeaders then
+        for k, v in pairs(extraHeaders) do headers[k] = v end
+    end
 
     local tries = silent and 1 or CFG.MAX_RETRY
     for i = 1, tries do
         local ok, res = pcall(fn, {
-            Url     = CFG.API_HOST .. endpoint,
+            Url     = CFG.HOST .. endpoint,
             Method  = "POST",
             Headers = headers,
             Body    = bodyStr,
@@ -133,34 +165,29 @@ local function apiPost(endpoint, body, silent)
         if ok and type(res) == "table" then
             local raw = res.Body or res.body or ""
             local ok2, data = pcall(HttpService.JSONDecode, HttpService, raw)
-            if ok2 and type(data) == "table" then
-                return data
-            end
+            if ok2 and type(data) == "table" then return data end
         end
         if i < tries then
-            if not silent then
-                log(string.format("[RETRY %d/%d] %s", i, tries, endpoint))
-            end
+            if not silent then log(string.format("[RETRY %d/%d] %s", i, tries, endpoint)) end
             task.wait(CFG.RETRY_WAIT)
         end
     end
 
-    if not silent then
-        log("[ERR] Request thất bại sau " .. tries .. " lần: " .. endpoint)
-    end
+    if not silent then log("[ERR] Request thất bại: " .. endpoint) end
     return nil
 end
 
 -- ══════════════════════════════════════════════════════════════════════
---  TAB ID – định danh duy nhất cho mỗi instance Roblox trong session
---  Format: userId_tickMs_rand1_rand2
+--  §6  TAB ID — định danh duy nhất cho mỗi Roblox process instance
+--
+--  Format: {userId}_{tickMs}_{rand6}{rand6}
+--  Mỗi lần execute tạo ra tab_id khác nhau.
+--  Server dùng tab_id này để track session.
 -- ══════════════════════════════════════════════════════════════════════
-local function genTabId()
-    -- Seed từ tick() để đảm bảo ngẫu nhiên giữa các lần chạy
+local function genTabId(userId)
     math.randomseed(math.floor(tick() * 100000) % 2147483647)
-    return string.format(
-        "%s_%d_%06d%06d",
-        tostring(lp.UserId),
+    return string.format("%s_%d_%06d%06d",
+        tostring(userId),
         math.floor(tick() * 1000),
         math.random(0, 999999),
         math.random(0, 999999)
@@ -168,69 +195,87 @@ local function genTabId()
 end
 
 -- ══════════════════════════════════════════════════════════════════════
---  VERIFY – xác thực key với server, trả về (true, hwid) hoặc (false)
+--  §7  VERIFY — Xác thực key với server
+--
+--  Gửi: key_code, user_id, username, tab_id, timestamp, sig
+--  sig = HMAC-SHA256(API_SECRET, key_code:user_id:timestamp)
+--
+--  Server kiểm tra:
+--    ✓ x-api-key hợp lệ
+--    ✓ sig hợp lệ (chống giả mạo)
+--    ✓ timestamp ±60s (chống replay attack)
+--    ✓ key tồn tại, đã redeem, chưa ban, chưa hết hạn
+--    ✓ tab_limit chưa đạt (hoặc user_id đã có session cũ → replace)
 -- ══════════════════════════════════════════════════════════════════════
-local function verify(key, tabId, hwid)
-    -- Bước 1: key không rỗng
-    if not key or key == "" or #key < 8 then
-        kick("Bạn chưa nhập key!\nDùng /redeem trong Discord để lấy key.")
+local function verify(keyVal, userId, username, tabId)
+    -- Bước 1: validate key locally
+    keyVal = tostring(keyVal or ""):match("^%s*(.-)%s*$")  -- trim
+    if #keyVal < 8 then
+        kick("Bạn chưa nhập key!\nSử dụng /redeem trong Discord để lấy key.")
         return false
     end
 
-    -- Bước 2: gửi lên server
-    log("[1/3] Đang xác thực key với server...")
-    local data = apiPost("/api/consume-tab", {
-        key_code = key,
-        hwid     = hwid,
-        tab_id   = tabId,
-    })
+    -- Bước 2: tạo chữ ký HMAC
+    log("[1/3] Đang ký và gửi request xác thực...")
+    local ts  = tostring(os.time())
+    local sig = hmacSha256(CFG.API_SECRET, keyVal .. ":" .. tostring(userId) .. ":" .. ts)
 
-    -- Bước 3: xử lý phản hồi
+    -- Bước 3: gửi lên server
+    local data = apiPost("/api/verify",
+        {
+            key_code  = keyVal,
+            user_id   = tostring(userId),
+            username  = tostring(username),
+            tab_id    = tabId,
+            timestamp = ts,
+        },
+        { ["x-signature"] = sig },
+        false
+    )
+
+    -- Bước 4: xử lý response
     if not data then
         kick(
-            "Không thể kết nối tới server xác thực.\n" ..
+            "Không thể kết nối tới server xác thực.\n\n" ..
             "• Server có thể đang bảo trì\n" ..
-            "• Kiểm tra lại kết nối mạng\n" ..
+            "• Kiểm tra kết nối Internet\n\n" ..
             "Thử lại sau 1-2 phút hoặc liên hệ Admin."
         )
         return false
     end
 
     if data.success then
-        -- Thành công
         local used  = tostring(data.tab_used  or "?")
-        local limit = data.tab_limit == 0 and "∞" or tostring(data.tab_limit or "?")
-        local flag  = data.reconnected and " [reconnect]" or ""
-        log(string.format("[2/3] Tab: %s/%s%s", used, limit, flag))
-        log("[3/3] ✅ Key hợp lệ – đang khởi động script...")
+        local limit = (data.tab_limit == 0) and "∞" or tostring(data.tab_limit or "?")
+        local stype = data.type or "new"
+        log(string.format("[2/3] Tab %s/%s [%s]", used, limit, stype))
+        log("[3/3] ✅ Key hợp lệ!")
         return true
     end
 
-    -- Thất bại – parse error code
+    -- Xử lý lỗi từ server
     local code = tostring(data.code  or ""):upper()
     local msg  = tostring(data.error or data.msg or ""):lower()
 
-    local errorMap = {
+    local ERR = {
         NOT_REDEEMED = "Key chưa được kích hoạt!\nDùng /redeem trong Discord.",
         NOT_FOUND    = "Key không tồn tại!\nKiểm tra lại key của bạn.",
         EXPIRED      = "Key đã hết hạn!\nLiên hệ Admin để gia hạn.",
         BLACKLISTED  = "Key bị blacklist!\nLiên hệ Admin.",
-        BANNED       = "Tài khoản của bạn đã bị ban!\nLiên hệ Admin.",
+        BANNED       = "Tài khoản bị ban!\nLiên hệ Admin.",
         TAB_LIMIT    = string.format(
-            "Đã đạt giới hạn số tab!\n(%s/%s tab đang mở)\nĐóng Roblox ở thiết bị khác rồi thử lại.",
-            tostring(data.tab_used  or "?"),
-            tostring(data.tab_limit or "?")
+            "Đã đạt giới hạn tab! (%s/%s tab đang mở)\nĐóng Roblox ở thiết bị khác rồi thử lại.",
+            tostring(data.tab_used or "?"), tostring(data.tab_limit or "?")
         ),
     }
 
-    -- Khớp theo code hoặc fallback theo message
-    local kickMsg = errorMap[code]
+    local kickMsg = ERR[code]
     if not kickMsg then
-        if msg:find("expir")     then kickMsg = errorMap.EXPIRED
-        elseif msg:find("black") then kickMsg = errorMap.BLACKLISTED
-        elseif msg:find("ban")   then kickMsg = errorMap.BANNED
-        elseif msg:find("tab")   then kickMsg = errorMap.TAB_LIMIT
-        elseif msg:find("redeem") or msg:find("activ") then kickMsg = errorMap.NOT_REDEEMED
+        if     msg:find("expir")                   then kickMsg = ERR.EXPIRED
+        elseif msg:find("black")                   then kickMsg = ERR.BLACKLISTED
+        elseif msg:find("ban")                     then kickMsg = ERR.BANNED
+        elseif msg:find("tab")                     then kickMsg = ERR.TAB_LIMIT
+        elseif msg:find("redeem") or msg:find("activ") then kickMsg = ERR.NOT_REDEEMED
         else kickMsg = "Key không hợp lệ!\nNếu vừa redeem hãy đợi 5 giây rồi thử lại." end
     end
 
@@ -239,77 +284,76 @@ local function verify(key, tabId, hwid)
 end
 
 -- ══════════════════════════════════════════════════════════════════════
---  HEARTBEAT LOOP – giữ tab alive mỗi HB_TICK giây
---  Nếu server không nhận được heartbeat trong HB_TIMEOUT giây,
---  tab sẽ tự động bị giải phóng (cho phép người khác dùng slot).
+--  §8  HEARTBEAT — giữ session alive
+--
+--  Gửi mỗi HB_TICK giây với key_code + tab_id.
+--  Nếu server không nhận heartbeat trong SESSION_TIMEOUT (30s) →
+--  session tự xóa, slot được giải phóng cho người khác.
 -- ══════════════════════════════════════════════════════════════════════
 local function startHeartbeat(keySnap, tabId)
     local alive = true
 
-    -- Trả tab khi người chơi rời game
+    -- Giải phóng tab khi người chơi thoát (nhanh hơn chờ timeout)
     Players.PlayerRemoving:Connect(function(p)
         if p ~= lp then return end
         alive = false
-        -- Gửi reset ngay lập tức để tab được giải phóng sớm
-        apiPost("/api/reset-tab", { key_code = keySnap, tab_id = tabId }, true)
-        log("Tab released.")
+        apiPost("/api/release", { key_code = keySnap, tab_id = tabId }, nil, true)
+        log("Session released.")
     end)
 
-    -- Vòng lặp heartbeat
+    -- Vòng lặp heartbeat trong background task
     task.spawn(function()
         while alive do
             task.wait(CFG.HB_TICK)
             if not alive then break end
-            local ok = apiPost("/api/heartbeat", {
-                key_code = keySnap,
-                tab_id   = tabId,
-            }, true)
-            -- Nếu server từ chối heartbeat nhiều lần liên tiếp → có thể bị kick
-            if ok and ok.success == false then
-                log("[WARN] Heartbeat bị từ chối bởi server")
+            local res = apiPost("/api/heartbeat", { key_code = keySnap, tab_id = tabId }, nil, true)
+            if res and res.success == false then
+                -- Server từ chối heartbeat (session bị xóa phía server)
+                log("[WARN] Heartbeat bị từ chối — session không còn tồn tại trên server.")
             end
         end
     end)
 end
 
 -- ══════════════════════════════════════════════════════════════════════
---  ENTRY POINT
+--  §9  ENTRY POINT
 -- ══════════════════════════════════════════════════════════════════════
 local function main()
-    log("══════════════════════════════════════")
+    log("══════════════════════════════════")
     log("  MTRCHILL KEY SYSTEM v5.0")
-    log("══════════════════════════════════════")
+    log("══════════════════════════════════")
 
-    local TAB_ID  = genTabId()
-    local KEY_VAL = tostring(script_key or ""):match("^%s*(.-)%s*$") -- trim whitespace
-    local HWID    = getHwid()
+    local KEY_VAL  = tostring(script_key or ""):match("^%s*(.-)%s*$")
+    local USER_ID  = lp.UserId
+    local USERNAME = tostring(lp.Name)
+    local TAB_ID   = genTabId(USER_ID)
 
-    log("HWID: " .. HWID:sub(1, 12) .. "...")
-    log("TAB : " .. TAB_ID:sub(1, 16) .. "...")
+    log(string.format("User  : %s (%d)", USERNAME, USER_ID))
+    log(string.format("TabID : ...%s", TAB_ID:sub(-12)))
 
-    -- Xác thực key
-    local verified = verify(KEY_VAL, TAB_ID, HWID)
-    if not verified then return end
+    -- Xác thực key — nếu thất bại thì kick và dừng
+    local ok = verify(KEY_VAL, USER_ID, USERNAME, TAB_ID)
+    if not ok then return end
 
-    -- Bắt đầu heartbeat (capture KEY_VAL & TAB_ID vào closure)
+    -- Bắt đầu heartbeat, capture KEY_VAL và TAB_ID vào closure
     startHeartbeat(KEY_VAL, TAB_ID)
 
-    -- Xóa dữ liệu nhạy cảm khỏi global sau khi đã dùng xong
-    -- API_KEY KHÔNG được xóa vì heartbeat/apiPost vẫn cần dùng CFG.API_KEY
+    -- Xóa script_key khỏi global sau 3s (đã capture vào closure an toàn)
+    -- CFG.API_KEY và CFG.API_SECRET vẫn cần cho heartbeat → KHÔNG xóa
     task.delay(3, function()
-        script_key = nil  -- đã capture vào KEY_VAL ở trên, xóa global an toàn
+        script_key = nil
     end)
 
-    log("══════════════════════════════════════")
-    log("  KEY HỢP LỆ – SCRIPT ĐANG CHẠY ✅")
-    log("══════════════════════════════════════")
+    log("══════════════════════════════════")
+    log("  ✅ KEY HỢP LỆ — ĐANG CHẠY")
+    log("══════════════════════════════════")
 
-    -- ╔══════════════════════════════════════════════════════════════╗
-    -- ║               ↓ DÁN GAME SCRIPT CỦA BẠN VÀO ĐÂY ↓          ║
-    -- ║  Script chỉ chạy khi key đã được xác thực thành công.       ║
-    -- ║  Mọi code bên dưới đều nằm trong vùng bảo vệ của key system ║
-    -- ╚══════════════════════════════════════════════════════════════╝
-
+    -- ╔══════════════════════════════════════════════════════════════════╗
+    -- ║          ↓  DÁN GAME SCRIPT CỦA BẠN VÀO ĐÂY  ↓               ║
+    -- ║                                                                  ║
+    -- ║  Mọi code bên dưới nằm trong vùng bảo vệ của key system.       ║
+    -- ║  Script CHỈ CHẠY khi key đã được xác thực thành công.          ║
+    -- ╚══════════════════════════════════════════════════════════════════╝
 
 
 local RS_ = game:GetService("ReplicatedStorage")
