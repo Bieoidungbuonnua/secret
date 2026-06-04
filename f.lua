@@ -14,7 +14,7 @@ local lp          = Players.LocalPlayer
 -- Config
 -- !!! THAY THE GIA TRI NAY BANG IP VPS VA API_KEY THUC CUA BAN !!!
 local API_HOST = "http://mbasic7.pikamc.vn:25232"  -- Phai khop PORT trong .env
-local API_KEY  = "K#8mV2@qL7!xP4R"           -- Phai khop API_KEY trong .env
+local API_KEY  = "mtrchillcyok211"           -- Phai khop API_KEY trong .env
 local DISCORD  = "Dms Mtr Chill"
 
 -- Heartbeat interval: nen = SESSION_TIMEOUT / 2 (SESSION_TIMEOUT=30 -> HB=15)
