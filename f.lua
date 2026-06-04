@@ -277,11 +277,10 @@ local function main()
         end
     end)
 
-    -- Buoc 4: Xoa thong tin nhay cam sau khi xac thuc xong
+    -- Buoc 4: Chi xoa global script_key de bao ve
+    -- KHONG xoa API_KEY va keySnap vi heartbeat van can su dung chung!
     task.delay(2, function()
-        API_KEY    = nil
-        script_key = nil
-        keySnap    = nil
+        script_key = nil  -- Xoa global de bao ve, du lieu da duoc snapshot vao keySnap
     end)
 
     log("[ SYS ] Script dang chay | Tab: " .. TAB_ID:sub(1, 24) .. "...")
