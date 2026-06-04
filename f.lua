@@ -255,7 +255,7 @@ local function main()
     -- ============================================
     --   PASTE MAIN SCRIPT CUA BAN VAO DAY
     -- ============================================
-print("hello wordld")
+    print("hello")
     -- ============================================
 end
 
